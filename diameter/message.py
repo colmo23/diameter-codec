@@ -121,9 +121,10 @@ class Message:
             "E" if self.is_error else "",
             "T" if self.is_retransmit else "",
         ])
+        avp_lines = "".join(f"\n  {avp!r}," for avp in self.avps)
         return (
             f"Message(command={self.command!r}, app_id={self.app_id}, "
-            f"flags={flag_str!r}, avps={len(self.avps)})"
+            f"flags={flag_str!r}, avps=[{avp_lines}\n])"
         )
 
     # ------------------------------------------------------------------
