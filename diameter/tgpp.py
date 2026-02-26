@@ -1,5 +1,5 @@
 """
-3GPP Diameter message factories (TS 29.272, 29.229, 29.329, 29.214, 29.212).
+3GPP Diameter message factories.
 
 Each public function builds a ready-to-encode :class:`~diameter.message.Message`
 with sensible default AVP values.  Every parameter can be overridden; pass
@@ -7,8 +7,12 @@ with sensible default AVP values.  Every parameter can be overridden; pass
 
 Interfaces covered
 ------------------
+* **Base protocol** (RFC 6733) — peer management
+  CER/CEA, DWR/DWA, DPR/DPA
 * **S6a / S6d** (App-ID 16777251, RFC 5516 / TS 29.272) — MME/SGSN ↔ HSS
   ULR/ULA, CLR/CLA, AIR/AIA, IDR/IDA, DSR/DSA, PUR/PUA, RSR/RSA, NOR/NOA
+* **S13** (App-ID 16777252, TS 29.272) — MME ↔ EIR
+  ECR/ECA
 * **Cx** (App-ID 16777216, TS 29.229) — S-CSCF / I-CSCF ↔ HSS
   UAR/UAA, SAR/SAA, LIR/LIA, MAR/MAA, RTR/RTA, PPR/PPA
 * **Sh** (App-ID 16777217, TS 29.329) — AS / MRFC ↔ HSS
@@ -17,6 +21,22 @@ Interfaces covered
   AAR/AAA, STR/STA, RAR/RAA, ASR/ASA
 * **Gx** (App-ID 16777238, TS 29.212) — PCEF ↔ PCRF
   CCR/CCA, RAR/RAA
+* **Sy** (App-ID 16777302, TS 29.219) — PCRF ↔ OCS
+  SLR/SLA, SSN/SSA
+* **SLg** (App-ID 16777255, TS 29.172) — GMLC ↔ MME/SGSN (location services)
+  PLR/PLA, LRR/LRA, RIR/RIA
+* **S6m / S6n** (App-ID 16777310/16777313, TS 29.336) — SCEF ↔ HSS
+  SIR/SIA, NIR/NIA
+* **S6c** (App-ID 16777312, TS 29.338) — SMS routing
+  SRR/SRA, MOFR/MOFA, MTFR/MTFA, ALR/ALA, RDSR/RDSA
+* **T6a / T6b** (App-ID 16777346, TS 29.128) — SCEF ↔ MME/SGSN
+  CMR/CMA, MODR/MODA, MTDR/MTDA
+* **MB2c / GCS** (App-ID 16777335, TS 29.468) — BM-SC ↔ GCS AS
+  GAR/GAA, GNR/GNA
+* **PC4a / ProSe** (App-ID 16777336, TS 29.344) — ProSe Function ↔ HSS
+  PIR/PIA, UPR/UPA, PROSE_PNR/PROSE_PNA, RSR/RSA, PSR/PSA
+* **Sd** (App-ID 16777303, TS 29.212) — PCRF ↔ TDF
+  TSR/TSA
 """
 
 import os
@@ -30,12 +50,21 @@ from .message import Message
 # ---------------------------------------------------------------------------
 # Application IDs
 # ---------------------------------------------------------------------------
-APP_CX  = 16777216   # Cx/Dx  TS 29.229
-APP_SH  = 16777217   # Sh/Dh  TS 29.329
-APP_RX  = 16777236   # Rx     TS 29.214
-APP_GX  = 16777238   # Gx     TS 29.212
-APP_S6A = 16777251   # S6a/S6d RFC 5516 / TS 29.272
-APP_S13 = 16777252   # S13    TS 29.272
+APP_CX   = 16777216   # Cx/Dx   TS 29.229
+APP_SH   = 16777217   # Sh/Dh   TS 29.329
+APP_RX   = 16777236   # Rx      TS 29.214
+APP_GX   = 16777238   # Gx      TS 29.212
+APP_S6A  = 16777251   # S6a/S6d RFC 5516 / TS 29.272
+APP_S13  = 16777252   # S13     TS 29.272
+APP_SLG  = 16777255   # SLg     TS 29.172
+APP_SY   = 16777302   # Sy      TS 29.219
+APP_SD   = 16777303   # Sd      TS 29.212
+APP_S6M  = 16777310   # S6m     TS 29.336
+APP_S6C  = 16777312   # S6c     TS 29.338
+APP_SGD  = 16777313   # SGd     TS 29.338
+APP_MB2C = 16777335   # MB2c    TS 29.468
+APP_PC4A = 16777336   # PC4a    TS 29.344
+APP_T6   = 16777346   # T6a/T6b TS 29.128
 
 # ---------------------------------------------------------------------------
 # Vendor ID
@@ -1658,3 +1687,1627 @@ def raa_gx(
         avps += extra_avps
     return Message("Re-Auth", APP_GX, is_request=False,
                    is_proxiable=True, avps=avps)
+
+
+# ===========================================================================
+# Base protocol  —  RFC 6733  (peer management, app_id = 0)
+# Note: CER/CEA, DWR/DWA, DPR/DPA do NOT carry Session-Id, VSAI or
+# Auth-Session-State.  They are peer-level messages, not application-level.
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Capabilities-Exchange  (CER / CEA)  — code 257
+# ---------------------------------------------------------------------------
+
+def cer(
+    origin_host: str = "node.example.com",
+    origin_realm: str = "example.com",
+    host_ip_address: str = "192.0.2.1",
+    vendor_id: int = VENDOR_3GPP,
+    product_name: str = "diameter-codec",
+    origin_state_id: Optional[int] = None,
+    auth_application_ids: Optional[List[int]] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Capabilities-Exchange-Request (CER)  RFC 6733 §5.3.1.
+
+    Sent by a Diameter peer immediately after establishing a transport
+    connection to advertise its capabilities.
+
+    Parameters
+    ----------
+    host_ip_address : str
+        The IP address of this peer (IPv4 dotted-quad or IPv6 colon-hex).
+    auth_application_ids : list[int], optional
+        Auth-Application-Id values to advertise.  Defaults to
+        ``[0, 16777251]`` (base + S6a).
+    """
+    avps: List[AVP] = [
+        AVP("Origin-Host", origin_host),
+        AVP("Origin-Realm", origin_realm),
+        AVP("Host-IP-Address", host_ip_address),
+        AVP("Vendor-Id", vendor_id),
+        AVP("Product-Name", product_name),
+    ]
+    if origin_state_id is not None:
+        avps.append(AVP("Origin-State-Id", origin_state_id))
+    for app_id in (auth_application_ids or [0, APP_S6A]):
+        avps.append(AVP("Auth-Application-Id", app_id))
+    if extra_avps:
+        avps += extra_avps
+    return Message("Capabilities-Exchange", 0, is_request=True,
+                   is_proxiable=False, avps=avps)
+
+
+def cea(
+    origin_host: str = "node.example.com",
+    origin_realm: str = "example.com",
+    result_code: int = SUCCESS,
+    host_ip_address: str = "192.0.2.1",
+    vendor_id: int = VENDOR_3GPP,
+    product_name: str = "diameter-codec",
+    origin_state_id: Optional[int] = None,
+    auth_application_ids: Optional[List[int]] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Capabilities-Exchange-Answer (CEA)  RFC 6733 §5.3.2.
+
+    Sent in response to a CER to confirm capabilities.
+    """
+    avps: List[AVP] = [
+        AVP("Result-Code", result_code),
+        AVP("Origin-Host", origin_host),
+        AVP("Origin-Realm", origin_realm),
+        AVP("Host-IP-Address", host_ip_address),
+        AVP("Vendor-Id", vendor_id),
+        AVP("Product-Name", product_name),
+    ]
+    if origin_state_id is not None:
+        avps.append(AVP("Origin-State-Id", origin_state_id))
+    for app_id in (auth_application_ids or [0, APP_S6A]):
+        avps.append(AVP("Auth-Application-Id", app_id))
+    if extra_avps:
+        avps += extra_avps
+    return Message("Capabilities-Exchange", 0, is_request=False,
+                   is_proxiable=False, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# Device-Watchdog  (DWR / DWA)  — code 280
+# ---------------------------------------------------------------------------
+
+def dwr(
+    origin_host: str = "node.example.com",
+    origin_realm: str = "example.com",
+    origin_state_id: Optional[int] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Device-Watchdog-Request (DWR)  RFC 6733 §5.5.1.
+
+    Sent periodically to verify that a peer connection is still alive.
+    """
+    avps: List[AVP] = [
+        AVP("Origin-Host", origin_host),
+        AVP("Origin-Realm", origin_realm),
+    ]
+    if origin_state_id is not None:
+        avps.append(AVP("Origin-State-Id", origin_state_id))
+    if extra_avps:
+        avps += extra_avps
+    return Message("Device-Watchdog", 0, is_request=True,
+                   is_proxiable=False, avps=avps)
+
+
+def dwa(
+    origin_host: str = "node.example.com",
+    origin_realm: str = "example.com",
+    result_code: int = SUCCESS,
+    origin_state_id: Optional[int] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """Device-Watchdog-Answer (DWA)  RFC 6733 §5.5.2."""
+    avps: List[AVP] = [
+        AVP("Result-Code", result_code),
+        AVP("Origin-Host", origin_host),
+        AVP("Origin-Realm", origin_realm),
+    ]
+    if origin_state_id is not None:
+        avps.append(AVP("Origin-State-Id", origin_state_id))
+    if extra_avps:
+        avps += extra_avps
+    return Message("Device-Watchdog", 0, is_request=False,
+                   is_proxiable=False, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# Disconnect-Peer  (DPR / DPA)  — code 282
+# ---------------------------------------------------------------------------
+
+def dpr(
+    origin_host: str = "node.example.com",
+    origin_realm: str = "example.com",
+    disconnect_cause: str = "DO_NOT_WANT_TO_TALK_TO_YOU",
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Disconnect-Peer-Request (DPR)  RFC 6733 §5.4.1.
+
+    Sent to gracefully shut down a peer connection.
+
+    Parameters
+    ----------
+    disconnect_cause : str
+        Disconnect-Cause enum name: ``"REBOOTING"``,
+        ``"BUSY"``, or ``"DO_NOT_WANT_TO_TALK_TO_YOU"``.
+    """
+    avps: List[AVP] = [
+        AVP("Origin-Host", origin_host),
+        AVP("Origin-Realm", origin_realm),
+        AVP("Disconnect-Cause", disconnect_cause),
+    ]
+    if extra_avps:
+        avps += extra_avps
+    return Message("Disconnect-Peer", 0, is_request=True,
+                   is_proxiable=False, avps=avps)
+
+
+def dpa(
+    origin_host: str = "node.example.com",
+    origin_realm: str = "example.com",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """Disconnect-Peer-Answer (DPA)  RFC 6733 §5.4.2."""
+    avps: List[AVP] = [
+        AVP("Result-Code", result_code),
+        AVP("Origin-Host", origin_host),
+        AVP("Origin-Realm", origin_realm),
+    ]
+    if extra_avps:
+        avps += extra_avps
+    return Message("Disconnect-Peer", 0, is_request=False,
+                   is_proxiable=False, avps=avps)
+
+
+# ===========================================================================
+# S13  —  MME ↔ EIR  (TS 29.272)  App-ID 16777252
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# ME-Identity-Check  (ECR / ECA)  — code 324
+# ---------------------------------------------------------------------------
+
+def ecr(
+    origin_host: str = "mme.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "eir.example.com",
+    destination_realm: str = "example.com",
+    imsi: str = "001010123456789",
+    imei: str = "353490069873785",
+    software_version: str = "00",
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    ME-Identity-Check-Request (ECR)  TS 29.272 §7.2.19.
+
+    Sent by the MME to the EIR to check whether an IMEI is whitelisted.
+
+    Parameters
+    ----------
+    imei : str
+        15-digit IMEI string.
+    software_version : str
+        2-digit software version (appended to form the IMEISV).
+    """
+    avps = _base_request("3GPP-ME-Identity-Check", APP_S13,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps += [
+        AVP("User-Name", imsi),
+        AVP("Terminal-Information", [
+            AVP("IMEI", imei),
+            AVP("Software-Version", software_version),
+        ]),
+    ]
+    if extra_avps:
+        avps += extra_avps
+    return Message("3GPP-ME-Identity-Check", APP_S13, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def eca(
+    origin_host: str = "eir.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    equipment_status: str = "WHITELISTED",
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    ME-Identity-Check-Answer (ECA)  TS 29.272 §7.2.20.
+
+    Parameters
+    ----------
+    equipment_status : str
+        Equipment-Status enum: ``"WHITELISTED"``, ``"BLACKLISTED"``,
+        or ``"GREYLISTED"``.
+    """
+    avps = _base_answer("3GPP-ME-Identity-Check", APP_S13,
+                        origin_host, origin_realm, session_id, result_code)
+    avps.append(AVP("Equipment-Status", equipment_status))
+    if extra_avps:
+        avps += extra_avps
+    return Message("3GPP-ME-Identity-Check", APP_S13, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ===========================================================================
+# SLg  —  GMLC ↔ MME/SGSN  (TS 29.172)  App-ID 16777255
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Provide-Location  (PLR / PLA)  — code 8388620
+# ---------------------------------------------------------------------------
+
+def plr(
+    origin_host: str = "gmlc.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "mme.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    lcs_client_type: str = "EMERGENCY_SERVICES",
+    lcs_reference_number: bytes = b"\x01",
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Provide-Location-Request (PLR)  TS 29.172 §7.3.1.
+
+    Sent by the GMLC to the MME/SGSN to request UE location.
+
+    Parameters
+    ----------
+    lcs_client_type : str
+        LCS-Client-Type enum: ``"EMERGENCY_SERVICES"``,
+        ``"VALUE_ADDED_SERVICES"``, ``"PLMN_OPERATOR_SERVICES"``,
+        ``"LAWFUL_INTERCEPT_SERVICES"``.
+    lcs_reference_number : bytes
+        1-byte LCS reference number for correlating the request.
+    """
+    avps = _base_request("3GPP-Provide-Location", APP_SLG,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps += [
+        AVP("User-Name", user_name),
+        AVP("LCS-EPS-Client-Name", [
+            AVP("LCS-Name-String", "LCS-Client"),
+            AVP("LCS-Format-Indicator", "LOGICAL_NAME"),
+        ]),
+        AVP("LCS-Client-Type", lcs_client_type),
+        AVP("LCS-Reference-Number", lcs_reference_number),
+        AVP("LCS-QoS", [
+            AVP("LCS-QoS-Class", "ASSURED"),
+        ]),
+    ]
+    if extra_avps:
+        avps += extra_avps
+    return Message("3GPP-Provide-Location", APP_SLG, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def pla(
+    origin_host: str = "mme.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Provide-Location-Answer (PLA)  TS 29.172 §7.3.2.
+
+    Returned by the MME/SGSN after performing the location procedure.
+    """
+    avps = _base_answer("3GPP-Provide-Location", APP_SLG,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("3GPP-Provide-Location", APP_SLG, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# Location-Report  (LRR / LRA)  — code 8388621
+# ---------------------------------------------------------------------------
+
+def lrr(
+    origin_host: str = "mme.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "gmlc.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    location_event: str = "EMERGENCY_CALL_ORIGINATION",
+    lcs_reference_number: bytes = b"\x01",
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Location-Report-Request (LRR)  TS 29.172 §7.3.3.
+
+    Sent by the MME/SGSN to the GMLC to report a location event.
+
+    Parameters
+    ----------
+    location_event : str
+        Location-Event enum: ``"EMERGENCY_CALL_ORIGINATION"``,
+        ``"EMERGENCY_CALL_RELEASE"``, ``"DEFERRED_MT_LR_RESPONSE"``,
+        ``"DEFERRED_MO_LR_TTTP_INITIATION"``, etc.
+    """
+    avps = _base_request("3GPP-Location-Report", APP_SLG,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps += [
+        AVP("User-Name", user_name),
+        AVP("Location-Event", location_event),
+        AVP("LCS-EPS-Client-Name", [
+            AVP("LCS-Name-String", "LCS-Client"),
+            AVP("LCS-Format-Indicator", "LOGICAL_NAME"),
+        ]),
+        AVP("LCS-Reference-Number", lcs_reference_number),
+    ]
+    if extra_avps:
+        avps += extra_avps
+    return Message("3GPP-Location-Report", APP_SLG, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def lra(
+    origin_host: str = "gmlc.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """Location-Report-Answer (LRA)  TS 29.172 §7.3.4."""
+    avps = _base_answer("3GPP-Location-Report", APP_SLG,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("3GPP-Location-Report", APP_SLG, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# LCS-Routing-Info  (RIR / RIA)  — code 8388622
+# ---------------------------------------------------------------------------
+
+def rir(
+    origin_host: str = "gmlc.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "hss.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    msisdn: Optional[bytes] = None,
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    LCS-Routing-Info-Request (RIR)  TS 29.172 §7.3.5.
+
+    Sent by the GMLC to the HSS to obtain routing information for a UE
+    (i.e. which MME/SGSN is currently serving it).
+
+    Parameters
+    ----------
+    user_name : str
+        IMSI of the target UE.
+    msisdn : bytes, optional
+        BCD-encoded MSISDN (alternative to IMSI).
+    """
+    avps = _base_request("3GPP-LCS-Routing-Info", APP_SLG,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps.append(AVP("User-Name", user_name))
+    if msisdn:
+        avps.append(AVP("MSISDN", msisdn))
+    if extra_avps:
+        avps += extra_avps
+    return Message("3GPP-LCS-Routing-Info", APP_SLG, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def ria(
+    origin_host: str = "hss.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    serving_node_avps: Optional[List[AVP]] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    LCS-Routing-Info-Answer (RIA)  TS 29.172 §7.3.6.
+
+    Parameters
+    ----------
+    serving_node_avps : list[AVP], optional
+        Child AVPs of the Serving-Node grouped AVP (e.g.
+        ``AVP("MME-Name", "mme.example.com")``).  A placeholder
+        MME-Name entry is used when omitted.
+    """
+    avps = _base_answer("3GPP-LCS-Routing-Info", APP_SLG,
+                        origin_host, origin_realm, session_id, result_code)
+    node_avps = serving_node_avps or [
+        AVP("MME-Name", "mme.example.com"),
+    ]
+    avps.append(AVP("Serving-Node", node_avps))
+    if extra_avps:
+        avps += extra_avps
+    return Message("3GPP-LCS-Routing-Info", APP_SLG, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ===========================================================================
+# Sy  —  PCRF ↔ OCS  (TS 29.219)  App-ID 16777302
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Spending-Limit  (SLR / SLA)  — code 8388635
+# ---------------------------------------------------------------------------
+
+def slr(
+    origin_host: str = "pcrf.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "ocs.example.com",
+    destination_realm: str = "example.com",
+    sl_request_type: str = "INITIAL_REQUEST",
+    policy_counter_identifiers: Optional[List[str]] = None,
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Spending-Limit-Request (SLR)  TS 29.219 §4.5.1.
+
+    Sent by the PCRF to the OCS to subscribe to policy counter status.
+
+    Parameters
+    ----------
+    sl_request_type : str
+        SL-Request-Type enum: ``"INITIAL_REQUEST"`` or
+        ``"INTERMEDIATE_REQUEST"``.
+    policy_counter_identifiers : list[str], optional
+        Policy-Counter-Identifier values to subscribe to.
+    """
+    avps = _base_request("Spending-Limit", APP_SY,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps.append(AVP("SL-Request-Type", sl_request_type))
+    for pci in (policy_counter_identifiers or ["default-counter"]):
+        avps.append(AVP("Policy-Counter-Identifier", pci))
+    if extra_avps:
+        avps += extra_avps
+    return Message("Spending-Limit", APP_SY, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def sla(
+    origin_host: str = "ocs.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    policy_counter_reports: Optional[List[AVP]] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Spending-Limit-Answer (SLA)  TS 29.219 §4.5.2.
+
+    Parameters
+    ----------
+    policy_counter_reports : list[AVP], optional
+        Policy-Counter-Status-Report grouped AVPs.
+    """
+    avps = _base_answer("Spending-Limit", APP_SY,
+                        origin_host, origin_realm, session_id, result_code)
+    for report in (policy_counter_reports or []):
+        avps.append(report)
+    if extra_avps:
+        avps += extra_avps
+    return Message("Spending-Limit", APP_SY, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# Spending-Status-Notification  (SSN / SSA)  — code 8388636
+# ---------------------------------------------------------------------------
+
+def ssn(
+    origin_host: str = "ocs.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "pcrf.example.com",
+    destination_realm: str = "example.com",
+    policy_counter_reports: Optional[List[AVP]] = None,
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Spending-Status-Notification-Request (SSN)  TS 29.219 §4.5.3.
+
+    Sent by the OCS to the PCRF to push policy counter status changes.
+
+    Parameters
+    ----------
+    policy_counter_reports : list[AVP], optional
+        Policy-Counter-Status-Report grouped AVPs describing the changes.
+        A placeholder entry is included when omitted.
+    """
+    avps = _base_request("Spending-Status-Notification", APP_SY,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    for report in (policy_counter_reports or [
+        AVP("Policy-Counter-Status-Report", [
+            AVP("Policy-Counter-Identifier", "default-counter"),
+            AVP("Policy-Counter-Status", "active"),
+        ]),
+    ]):
+        avps.append(report)
+    if extra_avps:
+        avps += extra_avps
+    return Message("Spending-Status-Notification", APP_SY, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def ssa(
+    origin_host: str = "pcrf.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """Spending-Status-Notification-Answer (SSA)  TS 29.219 §4.5.4."""
+    avps = _base_answer("Spending-Status-Notification", APP_SY,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("Spending-Status-Notification", APP_SY, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ===========================================================================
+# Sd  —  PCRF ↔ TDF  (TS 29.212)  App-ID 16777303
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# TDF-Session  (TSR / TSA)  — code 8388637
+# ---------------------------------------------------------------------------
+
+def tsr(
+    origin_host: str = "pcrf.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "tdf.example.com",
+    destination_realm: str = "example.com",
+    ip_can_type: str = "3GPP-EPS",
+    rat_type: str = "EUTRAN",
+    framed_ip_address: Optional[str] = None,
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    TDF-Session-Request (TSR)  TS 29.212 §4c.5.1  [Sd interface].
+
+    Sent by the PCRF to the TDF to initiate an Sd session.
+
+    Parameters
+    ----------
+    ip_can_type : str
+        IP-CAN-Type enum (e.g. ``"3GPP-EPS"``).
+    framed_ip_address : str, optional
+        UE IP address (IPv4 dotted-quad or IPv6 colon-hex).
+    """
+    avps = _base_request("TDF-Session", APP_SD,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps += [
+        AVP("IP-CAN-Type", ip_can_type),
+        AVP("RAT-Type", rat_type),
+    ]
+    if framed_ip_address:
+        avps.append(AVP("Framed-IP-Address", framed_ip_address))
+    if extra_avps:
+        avps += extra_avps
+    return Message("TDF-Session", APP_SD, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def tsa(
+    origin_host: str = "tdf.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """TDF-Session-Answer (TSA)  TS 29.212 §4c.5.2  [Sd interface]."""
+    avps = _base_answer("TDF-Session", APP_SD,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("TDF-Session", APP_SD, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ===========================================================================
+# S6m  —  SCEF ↔ HSS  (TS 29.336)  App-ID 16777310
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Subscriber-Information  (SIR / SIA)  — code 8388641
+# ---------------------------------------------------------------------------
+
+def sir(
+    origin_host: str = "scef.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "hss.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    msisdn: Optional[bytes] = None,
+    scef_id: Optional[str] = None,
+    monitoring_type: Optional[int] = None,
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Subscribe-Notifications / Subscriber-Information-Request (SIR)
+    TS 29.336 §8.3.2.
+
+    Sent by the SCEF to the HSS to subscribe to monitoring events for a UE.
+
+    Parameters
+    ----------
+    user_name : str
+        IMSI of the UE.
+    msisdn : bytes, optional
+        BCD-encoded MSISDN (alternative or additional to IMSI).
+    scef_id : str, optional
+        SCEF-ID (DiameterIdentity of the SCEF).
+    monitoring_type : int, optional
+        Monitoring-Type value (e.g. 3 for LOCATION_REPORTING).
+    """
+    avps = _base_request("3GPP-Subscriber-Information", APP_S6M,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    uid_children: List[AVP] = [AVP("User-Name", user_name)]
+    if msisdn:
+        uid_children.append(AVP("MSISDN", msisdn))
+    avps.append(AVP("User-Identifier", uid_children))
+    if scef_id:
+        avps.append(AVP("SCEF-ID", scef_id))
+    if monitoring_type is not None:
+        avps.append(AVP("Monitoring-Type", monitoring_type))
+    if extra_avps:
+        avps += extra_avps
+    return Message("3GPP-Subscriber-Information", APP_S6M, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def sia(
+    origin_host: str = "hss.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """Subscriber-Information-Answer (SIA)  TS 29.336 §8.3.3."""
+    avps = _base_answer("3GPP-Subscriber-Information", APP_S6M,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("3GPP-Subscriber-Information", APP_S6M, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# NIDD-Information  (NIR / NIA)  — code 8388726
+# ---------------------------------------------------------------------------
+
+def nir(
+    origin_host: str = "scef.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "mme.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    non_ip_data: Optional[bytes] = None,
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    NIDD-Information-Request (NIR)  TS 29.336 §8.3.8.
+
+    Sent by the SCEF to the MME/SGSN to deliver non-IP data to a UE
+    (MT-NIDD) or to retrieve MO-NIDD data.
+
+    Parameters
+    ----------
+    non_ip_data : bytes, optional
+        Payload bytes for MT-NIDD delivery.
+    """
+    avps = _base_request("NIDD-Information", APP_S6M,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps.append(AVP("User-Name", user_name))
+    if non_ip_data is not None:
+        avps.append(AVP("Non-IP-Data", non_ip_data))
+    if extra_avps:
+        avps += extra_avps
+    return Message("NIDD-Information", APP_S6M, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def nia(
+    origin_host: str = "mme.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    non_ip_data: Optional[bytes] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    NIDD-Information-Answer (NIA)  TS 29.336 §8.3.9.
+
+    Parameters
+    ----------
+    non_ip_data : bytes, optional
+        MO-NIDD payload bytes returned from the UE.
+    """
+    avps = _base_answer("NIDD-Information", APP_S6M,
+                        origin_host, origin_realm, session_id, result_code)
+    if non_ip_data is not None:
+        avps.append(AVP("Non-IP-Data", non_ip_data))
+    if extra_avps:
+        avps += extra_avps
+    return Message("NIDD-Information", APP_S6M, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ===========================================================================
+# S6c  —  SMS routing  (TS 29.338)  App-ID 16777312
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Send-Routing-Info-for-SM  (SRR / SRA)  — code 8388647
+# ---------------------------------------------------------------------------
+
+def srr(
+    origin_host: str = "smsc.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "hss.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    sm_rp_mti: str = "SM_DELIVER",
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Send-Routing-Info-for-SM-Request (SRR)  TS 29.338 §5.3.2.
+
+    Sent by the SMS-GMSC to the HSS to obtain routing info for SMS delivery.
+
+    Parameters
+    ----------
+    sm_rp_mti : str
+        SM-RP-MTI enum: ``"SM_DELIVER"`` or ``"SM_STATUS_REPORT"``.
+    """
+    avps = _base_request("Send-Routing-Info-for-SM", APP_S6C,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps += [
+        AVP("User-Name", user_name),
+        AVP("SM-RP-MTI", sm_rp_mti),
+    ]
+    if extra_avps:
+        avps += extra_avps
+    return Message("Send-Routing-Info-for-SM", APP_S6C, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def sra(
+    origin_host: str = "hss.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    serving_node_avps: Optional[List[AVP]] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Send-Routing-Info-for-SM-Answer (SRA)  TS 29.338 §5.3.3.
+
+    Parameters
+    ----------
+    serving_node_avps : list[AVP], optional
+        Child AVPs of Serving-Node (e.g. ``AVP("MME-Name", ...)``).
+    """
+    avps = _base_answer("Send-Routing-Info-for-SM", APP_S6C,
+                        origin_host, origin_realm, session_id, result_code)
+    node_avps = serving_node_avps or [AVP("MME-Name", "mme.example.com")]
+    avps.append(AVP("Serving-Node", node_avps))
+    if extra_avps:
+        avps += extra_avps
+    return Message("Send-Routing-Info-for-SM", APP_S6C, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# MO-Forward-Short-Message  (MOFR / MOFA)  — code 8388645
+# ---------------------------------------------------------------------------
+
+def mofr(
+    origin_host: str = "mme.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "smsc.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    sc_address: bytes = b"\x91\x44\x77\x58\x10\x06\xf0",
+    sm_rp_ui: bytes = b"\x00" * 16,
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    MO-Forward-Short-Message-Request (MOFR)  TS 29.338 §5.3.4.
+
+    Sent by the MME to the SMS-GMSC/IWMSC to forward an MO SMS.
+
+    Parameters
+    ----------
+    sc_address : bytes
+        BCD-encoded Service Centre address.
+    sm_rp_ui : bytes
+        SM-RP-UI (the SMS TPDU).
+    """
+    avps = _base_request("MO-Forward-Short-Message", APP_S6C,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps += [
+        AVP("User-Name", user_name),
+        AVP("SC-Address", sc_address),
+        AVP("SM-RP-UI", sm_rp_ui),
+    ]
+    if extra_avps:
+        avps += extra_avps
+    return Message("MO-Forward-Short-Message", APP_S6C, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def mofa(
+    origin_host: str = "smsc.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """MO-Forward-Short-Message-Answer (MOFA)  TS 29.338 §5.3.5."""
+    avps = _base_answer("MO-Forward-Short-Message", APP_S6C,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("MO-Forward-Short-Message", APP_S6C, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# MT-Forward-Short-Message  (MTFR / MTFA)  — code 8388646
+# ---------------------------------------------------------------------------
+
+def mtfr(
+    origin_host: str = "smsc.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "mme.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    sc_address: bytes = b"\x91\x44\x77\x58\x10\x06\xf0",
+    sm_rp_ui: bytes = b"\x00" * 16,
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    MT-Forward-Short-Message-Request (MTFR)  TS 29.338 §5.3.6.
+
+    Sent by the SMS-GMSC to the MME to deliver an MT SMS to a UE.
+
+    Parameters
+    ----------
+    sc_address : bytes
+        BCD-encoded Service Centre address.
+    sm_rp_ui : bytes
+        SM-RP-UI (the SMS TPDU).
+    """
+    avps = _base_request("MT-Forward-Short-Message", APP_S6C,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps += [
+        AVP("User-Name", user_name),
+        AVP("SC-Address", sc_address),
+        AVP("SM-RP-UI", sm_rp_ui),
+    ]
+    if extra_avps:
+        avps += extra_avps
+    return Message("MT-Forward-Short-Message", APP_S6C, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def mtfa(
+    origin_host: str = "mme.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """MT-Forward-Short-Message-Answer (MTFA)  TS 29.338 §5.3.7."""
+    avps = _base_answer("MT-Forward-Short-Message", APP_S6C,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("MT-Forward-Short-Message", APP_S6C, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# Alert-Service-Centre  (ALR / ALA)  — code 8388648
+# ---------------------------------------------------------------------------
+
+def alr(
+    origin_host: str = "mme.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "smsc.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    sc_address: bytes = b"\x91\x44\x77\x58\x10\x06\xf0",
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Alert-Service-Centre-Request (ALR)  TS 29.338 §5.3.8.
+
+    Sent by the MME to the SMS-SC to alert that a previously unreachable
+    UE is now reachable.
+    """
+    avps = _base_request("Alert-Service-Centre", APP_S6C,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps += [
+        AVP("User-Name", user_name),
+        AVP("SC-Address", sc_address),
+    ]
+    if extra_avps:
+        avps += extra_avps
+    return Message("Alert-Service-Centre", APP_S6C, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def ala(
+    origin_host: str = "smsc.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """Alert-Service-Centre-Answer (ALA)  TS 29.338 §5.3.9."""
+    avps = _base_answer("Alert-Service-Centre", APP_S6C,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("Alert-Service-Centre", APP_S6C, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# Report-SM-Delivery-Status  (RDSR / RDSA)  — code 8388649
+# ---------------------------------------------------------------------------
+
+def rdsr(
+    origin_host: str = "smsc.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "hss.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    sc_address: bytes = b"\x91\x44\x77\x58\x10\x06\xf0",
+    sm_delivery_outcome_avps: Optional[List[AVP]] = None,
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Report-SM-Delivery-Status-Request (RDSR)  TS 29.338 §5.3.10.
+
+    Sent by the SMS-GMSC to the HSS to report the outcome of an MT SMS.
+    """
+    avps = _base_request("Report-SM-Delivery-Status", APP_S6C,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps += [
+        AVP("User-Name", user_name),
+        AVP("SC-Address", sc_address),
+    ]
+    outcome_avps = sm_delivery_outcome_avps or [
+        AVP("SM-Delivery-Outcome", [
+            AVP("MME-SM-Delivery-Outcome", [
+                AVP("SM-Delivery-Cause", "SUCCESSFUL_TRANSFER"),
+            ]),
+        ]),
+    ]
+    avps += outcome_avps
+    if extra_avps:
+        avps += extra_avps
+    return Message("Report-SM-Delivery-Status", APP_S6C, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def rdsa(
+    origin_host: str = "hss.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """Report-SM-Delivery-Status-Answer (RDSA)  TS 29.338 §5.3.11."""
+    avps = _base_answer("Report-SM-Delivery-Status", APP_S6C,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("Report-SM-Delivery-Status", APP_S6C, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ===========================================================================
+# T6a / T6b  —  SCEF ↔ MME/SGSN  (TS 29.128)  App-ID 16777346
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Connection-Management  (CMR / CMA)  — code 8388732
+# ---------------------------------------------------------------------------
+
+def cmr(
+    origin_host: str = "scef.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "mme.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    connection_action: int = 0,
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Connection-Management-Request (CMR)  TS 29.128 §6.3.2.
+
+    Sent by the SCEF to the MME/SGSN to manage a non-IP PDN connection.
+
+    Parameters
+    ----------
+    connection_action : int
+        Connection-Action value (0 = Create-PDN-Connection,
+        1 = Delete-PDN-Connection-Request).
+    """
+    avps = _base_request("Connection-Management", APP_T6,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps += [
+        AVP("User-Name", user_name),
+        AVP("Connection-Action", connection_action),
+    ]
+    if extra_avps:
+        avps += extra_avps
+    return Message("Connection-Management", APP_T6, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def cma(
+    origin_host: str = "mme.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """Connection-Management-Answer (CMA)  TS 29.128 §6.3.3."""
+    avps = _base_answer("Connection-Management", APP_T6,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("Connection-Management", APP_T6, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# MO-Data  (MODR / MODA)  — code 8388733
+# ---------------------------------------------------------------------------
+
+def modr(
+    origin_host: str = "mme.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "scef.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    non_ip_data: bytes = b"",
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    MO-Data-Request (MODR)  TS 29.128 §6.3.4.
+
+    Sent by the MME/SGSN to the SCEF to deliver MO non-IP data from a UE.
+
+    Parameters
+    ----------
+    non_ip_data : bytes
+        The non-IP data payload from the UE.
+    """
+    avps = _base_request("MO-Data", APP_T6,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps.append(AVP("User-Name", user_name))
+    if non_ip_data:
+        avps.append(AVP("Non-IP-Data", non_ip_data))
+    if extra_avps:
+        avps += extra_avps
+    return Message("MO-Data", APP_T6, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def moda(
+    origin_host: str = "scef.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """MO-Data-Answer (MODA)  TS 29.128 §6.3.5."""
+    avps = _base_answer("MO-Data", APP_T6,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("MO-Data", APP_T6, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# MT-Data  (MTDR / MTDA)  — code 8388734
+# ---------------------------------------------------------------------------
+
+def mtdr(
+    origin_host: str = "scef.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "mme.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    non_ip_data: bytes = b"",
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    MT-Data-Request (MTDR)  TS 29.128 §6.3.6.
+
+    Sent by the SCEF to the MME/SGSN to deliver MT non-IP data to a UE.
+
+    Parameters
+    ----------
+    non_ip_data : bytes
+        The non-IP data payload destined for the UE.
+    """
+    avps = _base_request("MT-Data", APP_T6,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps.append(AVP("User-Name", user_name))
+    if non_ip_data:
+        avps.append(AVP("Non-IP-Data", non_ip_data))
+    if extra_avps:
+        avps += extra_avps
+    return Message("MT-Data", APP_T6, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def mtda(
+    origin_host: str = "mme.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """MT-Data-Answer (MTDA)  TS 29.128 §6.3.7."""
+    avps = _base_answer("MT-Data", APP_T6,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("MT-Data", APP_T6, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ===========================================================================
+# MB2c / GCS  —  BM-SC ↔ GCS AS  (TS 29.468)  App-ID 16777335
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# GCS-Action  (GAR / GAA)  — code 8388662
+# ---------------------------------------------------------------------------
+
+def gar(
+    origin_host: str = "gcsas.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "bmsc.example.com",
+    destination_realm: str = "example.com",
+    tmgi: bytes = b"\x00\x00\x01\x00\xf1\x10",
+    mbms_bearer_request_avps: Optional[List[AVP]] = None,
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    GCS-Action-Request (GAR)  TS 29.468 §5.3.2.
+
+    Sent by the GCS AS to the BM-SC to request a GCS bearer action
+    (establishment, modification, or release of an MBMS bearer).
+
+    Parameters
+    ----------
+    tmgi : bytes
+        6-byte Temporary Mobile Group Identity.
+    mbms_bearer_request_avps : list[AVP], optional
+        Child AVPs of MBMS-Bearer-Request.  Defaults to an establishment
+        request with the given TMGI.
+    """
+    avps = _base_request("GCS-Action", APP_MB2C,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    bearer_children = mbms_bearer_request_avps or [
+        AVP("TMGI", tmgi),
+        AVP("MBMS-Bearer-Event", 1),   # 1 = BEARER_ESTABLISHED
+    ]
+    avps.append(AVP("MBMS-Bearer-Request", bearer_children))
+    if extra_avps:
+        avps += extra_avps
+    return Message("GCS-Action", APP_MB2C, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def gaa(
+    origin_host: str = "bmsc.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    mbms_bearer_response_avps: Optional[List[AVP]] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    GCS-Action-Answer (GAA)  TS 29.468 §5.3.3.
+
+    Parameters
+    ----------
+    mbms_bearer_response_avps : list[AVP], optional
+        Child AVPs of MBMS-Bearer-Response.
+    """
+    avps = _base_answer("GCS-Action", APP_MB2C,
+                        origin_host, origin_realm, session_id, result_code)
+    if mbms_bearer_response_avps:
+        avps.append(AVP("MBMS-Bearer-Response", mbms_bearer_response_avps))
+    if extra_avps:
+        avps += extra_avps
+    return Message("GCS-Action", APP_MB2C, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# GCS-Notification  (GNR / GNA)  — code 8388663
+# ---------------------------------------------------------------------------
+
+def gnr(
+    origin_host: str = "bmsc.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "gcsas.example.com",
+    destination_realm: str = "example.com",
+    mbms_bearer_event_notification_avps: Optional[List[AVP]] = None,
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    GCS-Notification-Request (GNR)  TS 29.468 §5.3.4.
+
+    Sent by the BM-SC to the GCS AS to report a bearer event.
+
+    Parameters
+    ----------
+    mbms_bearer_event_notification_avps : list[AVP], optional
+        Child AVPs of MBMS-Bearer-Event-Notification.
+    """
+    avps = _base_request("GCS-Notification", APP_MB2C,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    notif_children = mbms_bearer_event_notification_avps or [
+        AVP("TMGI", b"\x00\x00\x01\x00\xf1\x10"),
+        AVP("MBMS-Bearer-Event", 1),
+    ]
+    avps.append(AVP("MBMS-Bearer-Event-Notification", notif_children))
+    if extra_avps:
+        avps += extra_avps
+    return Message("GCS-Notification", APP_MB2C, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def gna(
+    origin_host: str = "gcsas.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """GCS-Notification-Answer (GNA)  TS 29.468 §5.3.5."""
+    avps = _base_answer("GCS-Notification", APP_MB2C,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("GCS-Notification", APP_MB2C, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ===========================================================================
+# PC4a / ProSe  —  ProSe Function ↔ HSS  (TS 29.344)  App-ID 16777336
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# ProSe-Subscriber-Information  (PIR / PIA)  — code 8388664
+# ---------------------------------------------------------------------------
+
+def pir(
+    origin_host: str = "prose.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "hss.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    ProSe-Subscriber-Information-Request (PIR)  TS 29.344 §6.3.2.
+
+    Sent by the ProSe Function to the HSS to retrieve ProSe subscription data.
+    """
+    avps = _base_request("ProSe-Subscriber-Information", APP_PC4A,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps.append(AVP("User-Name", user_name))
+    if extra_avps:
+        avps += extra_avps
+    return Message("ProSe-Subscriber-Information", APP_PC4A, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def pia(
+    origin_host: str = "hss.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    prose_subscription_data_avps: Optional[List[AVP]] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    ProSe-Subscriber-Information-Answer (PIA)  TS 29.344 §6.3.3.
+
+    Parameters
+    ----------
+    prose_subscription_data_avps : list[AVP], optional
+        Child AVPs of ProSe-Subscription-Data grouped AVP.
+    """
+    avps = _base_answer("ProSe-Subscriber-Information", APP_PC4A,
+                        origin_host, origin_realm, session_id, result_code)
+    sub_children = prose_subscription_data_avps or [
+        AVP("ProSe-Permission", 0x01),   # bit 0 = ProSe-Direct enabled
+    ]
+    avps.append(AVP("ProSe-Subscription-Data", sub_children))
+    if extra_avps:
+        avps += extra_avps
+    return Message("ProSe-Subscriber-Information", APP_PC4A, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# Update-ProSe-Subscriber-Data  (UPR / UPA)  — code 8388665
+# ---------------------------------------------------------------------------
+
+def upr(
+    origin_host: str = "hss.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "prose.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    prose_subscription_data_avps: Optional[List[AVP]] = None,
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Update-ProSe-Subscriber-Data-Request (UPR)  TS 29.344 §6.3.4.
+
+    Sent by the HSS to the ProSe Function to push updated subscription data.
+    """
+    avps = _base_request("Update-ProSe-Subscriber-Data", APP_PC4A,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps.append(AVP("User-Name", user_name))
+    sub_children = prose_subscription_data_avps or [
+        AVP("ProSe-Permission", 0x01),
+    ]
+    avps.append(AVP("ProSe-Subscription-Data", sub_children))
+    if extra_avps:
+        avps += extra_avps
+    return Message("Update-ProSe-Subscriber-Data", APP_PC4A, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def upa(
+    origin_host: str = "prose.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """Update-ProSe-Subscriber-Data-Answer (UPA)  TS 29.344 §6.3.5."""
+    avps = _base_answer("Update-ProSe-Subscriber-Data", APP_PC4A,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("Update-ProSe-Subscriber-Data", APP_PC4A, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# ProSe-Notify  (PROSE_PNR / PROSE_PNA)  — code 8388666
+# ---------------------------------------------------------------------------
+
+def prose_pnr(
+    origin_host: str = "prose.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "hss.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    ProSe-Notify-Request (PNR)  TS 29.344 §6.3.6.
+
+    Sent by the ProSe Function to the HSS to notify of a ProSe event.
+    """
+    avps = _base_request("ProSe-Notify", APP_PC4A,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps.append(AVP("User-Name", user_name))
+    if extra_avps:
+        avps += extra_avps
+    return Message("ProSe-Notify", APP_PC4A, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def prose_pna(
+    origin_host: str = "hss.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """ProSe-Notify-Answer (PNA)  TS 29.344 §6.3.7."""
+    avps = _base_answer("ProSe-Notify", APP_PC4A,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("ProSe-Notify", APP_PC4A, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# Reset (ProSe)  (RSR_PROSE / RSA_PROSE)  — code 8388667
+# ---------------------------------------------------------------------------
+
+def rsr_prose(
+    origin_host: str = "hss.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "prose.example.com",
+    destination_realm: str = "example.com",
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    Reset-Request (RSR) [PC4a]  TS 29.344 §6.3.8.
+
+    Sent by the HSS to the ProSe Function to trigger a re-registration
+    of ProSe subscription data for all affected UEs.
+    """
+    avps = _base_request("Reset", APP_PC4A,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    if extra_avps:
+        avps += extra_avps
+    return Message("Reset", APP_PC4A, is_request=True,
+                   is_proxiable=True, avps=avps)
+
+
+def rsa_prose(
+    origin_host: str = "prose.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """Reset-Answer (RSA) [PC4a]  TS 29.344 §6.3.9."""
+    avps = _base_answer("Reset", APP_PC4A,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("Reset", APP_PC4A, is_request=False,
+                   is_proxiable=True, avps=avps)
+
+
+# ---------------------------------------------------------------------------
+# ProSe-Initial-Location-Information  (PSR / PSA)  — code 8388713
+# ---------------------------------------------------------------------------
+
+def psr(
+    origin_host: str = "prose.example.com",
+    origin_realm: str = "example.com",
+    destination_host: str = "mme.example.com",
+    destination_realm: str = "example.com",
+    user_name: str = "001010123456789",
+    prose_initial_location_avps: Optional[List[AVP]] = None,
+    session_id: Optional[str] = None,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """
+    ProSe-Initial-Location-Information-Request (PSR)  TS 29.344 §6.3.12.
+
+    Sent by the ProSe Function to the MME to request the initial location
+    of a UE for ProSe proximity checks.
+    """
+    avps = _base_request("ProSe-Initial-Location-Information", APP_PC4A,
+                         origin_host, origin_realm,
+                         destination_host, destination_realm,
+                         session_id)
+    avps.append(AVP("User-Name", user_name))
+    loc_children = prose_initial_location_avps or [
+        AVP("MME-Name", "mme.example.com"),
+    ]
+    avps.append(AVP("ProSe-Initial-Location-Information", loc_children))
+    if extra_avps:
+        avps += extra_avps
+    return Message("ProSe-Initial-Location-Information", APP_PC4A,
+                   is_request=True, is_proxiable=True, avps=avps)
+
+
+def psa(
+    origin_host: str = "mme.example.com",
+    origin_realm: str = "example.com",
+    session_id: str = "session-id",
+    result_code: int = SUCCESS,
+    extra_avps: Optional[List[AVP]] = None,
+) -> Message:
+    """ProSe-Initial-Location-Information-Answer (PSA)  TS 29.344 §6.3.13."""
+    avps = _base_answer("ProSe-Initial-Location-Information", APP_PC4A,
+                        origin_host, origin_realm, session_id, result_code)
+    if extra_avps:
+        avps += extra_avps
+    return Message("ProSe-Initial-Location-Information", APP_PC4A,
+                   is_request=False, is_proxiable=True, avps=avps)
