@@ -1,5 +1,5 @@
 import binascii
-from diameter import Dictionary, Message, AVP
+from diameter import Dictionary, Message, AVP, tgpp
 
 # Load the dictionary once (resolves all vendor XML files automatically)
 d = Dictionary()
@@ -35,3 +35,7 @@ print(msg3.command)
 print(msg3.get_avp("Origin-Host").value)  
 print(msg3.get_avp("Origin-Realm").value)  
 print(msg3)
+
+ula = tgpp.ula()
+print(ula)
+print(binascii.b2a_hex(ula.encode(d)))
