@@ -29,6 +29,20 @@ POLL_INTERVAL   = 0.25
 STARTUP_TIMEOUT = 20
 DELIVERY_WAIT   = 1.0
 
+# Example ULR: NTT Docomo Japan subscriber roaming in Ireland (Vodafone IE)
+# IMSI: MCC=440 MNC=10 (NTT Docomo)
+# Visited-PLMN-Id: MCC=272 MNC=01 (Vodafone Ireland) — 3GPP TS 24.008 §10.5.1.13 encoding
+EXAMPLE_ULR = dict(
+    origin_host      = "mme.mnc010.mcc440.3gppnetwork.org",
+    origin_realm     = "mnc010.mcc440.3gppnetwork.org",
+    destination_host = "hss.mnc010.mcc440.3gppnetwork.org",
+    destination_realm= "mnc010.mcc440.3gppnetwork.org",
+    user_name        = "440100123456789",
+    rat_type         = "EUTRAN",
+    ulr_flags        = 0x02,
+    visited_plmn_id  = bytes.fromhex("72f210"),  # MCC=272 MNC=01
+)
+
 # ANSI colour helpers (disabled when stdout is not a tty)
 _USE_COLOR = sys.stdout.isatty()
 _GREEN  = "\033[32m" if _USE_COLOR else ""
@@ -198,7 +212,7 @@ def main() -> int:
         # ------------------------------------------------------------------
         # Step 1 — start subprocesses
         # ------------------------------------------------------------------
-        print(f"\n[1/5] Starting subprocesses")
+        print(f"\n[1/6] Starting subprocesses")
 
         server_log  = tempfile.TemporaryFile()
         server_proc = _start([
@@ -225,7 +239,7 @@ def main() -> int:
         # ------------------------------------------------------------------
         # Step 2 — wait for readiness
         # ------------------------------------------------------------------
-        print(f"\n[2/5] Waiting for readiness  (timeout {STARTUP_TIMEOUT}s)")
+        print(f"\n[2/6] Waiting for readiness  (timeout {STARTUP_TIMEOUT}s)")
 
         if not _wait_http(server_api, "server HTTP API", STARTUP_TIMEOUT):
             _dump_logs("server", server_log)
@@ -241,7 +255,7 @@ def main() -> int:
         # ------------------------------------------------------------------
         # Step 3 — discover functions
         # ------------------------------------------------------------------
-        print(f"\n[3/5] Discovering available functions")
+        print(f"\n[3/6] Discovering available functions")
 
         func_names = client_api.list_functions()
         print(f"    {len(func_names)} tgpp functions registered")
@@ -251,18 +265,43 @@ def main() -> int:
         client_api.clear_messages()
 
         # ------------------------------------------------------------------
-        # Step 4 — send every message type
+        # Step 4 — example ULR: Japanese subscriber roaming in Ireland
         # ------------------------------------------------------------------
-        print(f"\n[4/5] Sending all {len(func_names)} message types via client API")
+        print(f"\n[4/6] Example ULR — Japan IMSI roaming in Ireland")
+        print(f"    IMSI          : {EXAMPLE_ULR['user_name']}  (NTT Docomo MCC=440 MNC=10)")
+        print(f"    Visited-PLMN  : {EXAMPLE_ULR['visited_plmn_id'].hex()}  (Vodafone Ireland MCC=272 MNC=01)")
+
+        client_api.send("ulr", **EXAMPLE_ULR)
+        time.sleep(0.3)
+
+        example_msgs = server_api.get_messages()
+        if example_msgs:
+            m = example_msgs[0]
+            print(f"    Received by server:")
+            print(f"      command        : {m.command}")
+            print(f"      app_id         : {m.app_id}  (S6a)")
+            print(f"      User-Name      : {m.get_avp_value('User-Name')}")
+            print(f"      Visited-PLMN-Id: {m.get_avp_value('Visited-PLMN-Id')}")
+            print(f"      RAT-Type       : {m.get_avp_value('RAT-Type')}")
+            print(f"      wire bytes     : {len(m.raw_bytes())}")
+        else:
+            print(f"    {_RED}ERROR: server received no messages{_RESET}")
+
+        server_api.clear_messages()
+
+        # ------------------------------------------------------------------
+        # Step 5 — send every message type
+        # ------------------------------------------------------------------
+        print(f"\n[5/6] Sending all {len(func_names)} message types via client API")
         t0      = time.time()
         results = _send_all(client_api, func_names)
         elapsed = time.time() - t0
         print(f"\n    Completed in {elapsed:.2f}s")
 
         # ------------------------------------------------------------------
-        # Step 5 — verify receipt on server
+        # Step 6 — verify receipt on server
         # ------------------------------------------------------------------
-        print(f"\n[5/5] Verifying receipt on server  (waiting {DELIVERY_WAIT}s)")
+        print(f"\n[6/6] Verifying receipt on server  (waiting {DELIVERY_WAIT}s)")
         time.sleep(DELIVERY_WAIT)
 
         received = len(server_api.get_messages())
