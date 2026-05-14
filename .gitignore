@@ -1,3 +1,4 @@
-__pycache__
-diameter/__pycache__/message.cpython-312.pyc
+__pycache__/
+**/__pycache__/
+*.pyc
 messages.hex
