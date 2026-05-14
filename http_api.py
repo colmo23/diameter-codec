@@ -425,6 +425,72 @@ class DiameterAPI:
         _sender.__doc__ = func.__doc__
         return _sender
 
+    # ------------------------------------------------------------------
+    # Auto-response rules
+    # ------------------------------------------------------------------
+
+    def get_response_rules(self) -> dict:
+        """
+        Return all configured auto-response rules and the list of commands
+        that support auto-responses.
+
+        Returns
+        -------
+        dict
+            ``{"rules": {command: kwargs, ...}, "available": [command, ...]}``
+        """
+        return self._request("GET", "/responses")
+
+    def set_response_rule(self, command: str, **kwargs) -> dict:
+        """
+        Configure an auto-response for an incoming Diameter command.
+
+        When a request with *command* is received, the peer will automatically
+        build and send the corresponding answer using the supplied kwargs as
+        overrides (unspecified params use their tgpp function defaults).  The
+        Session-Id is always mirrored from the incoming request unless you
+        explicitly supply ``session_id``.
+
+        Parameters
+        ----------
+        command : str
+            Diameter command name, e.g. ``"3GPP-Update-Location"``,
+            ``"Location-Info"``, ``"User-Data"``.
+        **kwargs
+            Overrides for the answer function.  ``bytes`` values are
+            converted to hex strings automatically.
+
+        Examples
+        --------
+        Configure a ULA with default subscription data::
+
+            server.set_response_rule("3GPP-Update-Location",
+                                     result_code=2001, ula_flags=1)
+
+        Configure a LIA pointing at a specific S-CSCF::
+
+            server.set_response_rule("Location-Info",
+                                     result_code=2001,
+                                     server_name="sip:scscf.ims.example.com:5060")
+
+        Configure a UDA with raw Sh-User-Data XML::
+
+            server.set_response_rule("User-Data",
+                                     result_code=2001,
+                                     sh_user_data=b"<Sh-Data>...</Sh-Data>")
+        """
+        body = _to_json_body(None, kwargs)
+        return self._request("PUT", f"/responses/{command}", body)
+
+    def delete_response_rule(self, command: str) -> dict:
+        """
+        Remove the auto-response rule for *command*.
+
+        Returns ``{"deleted": true}`` if a rule existed, ``{"deleted": false}``
+        otherwise.
+        """
+        return self._request("DELETE", f"/responses/{command}")
+
     def __repr__(self) -> str:
         return f"DiameterAPI({self.base_url!r})"
 

@@ -14,15 +14,23 @@ The client reconnects automatically whenever the connection drops.
 
 HTTP endpoints
 --------------
-  GET    /messages           List received messages as JSON.
-                             Add ?download=1 to get a file attachment.
-  DELETE /messages           Clear received messages.
-  GET    /functions          List all tgpp factory functions + parameter schemas.
-  GET    /functions/<name>   Schema for a single function.
-  POST   /send/<func>        Build and send a message to the server.
-                             Body: JSON object with the function's kwargs.
-                             bytes parameters take hex strings, e.g. {"visited_plmn_id": "00f110"}.
-  GET    /status             Connection state.
+  GET    /messages              List received messages as JSON.
+                                Add ?download=1 to get a file attachment.
+  DELETE /messages              Clear received messages.
+  GET    /functions             List all tgpp factory functions + parameter schemas.
+  GET    /functions/<name>      Schema for a single function.
+  POST   /send/<func>           Build and send a message to the server.
+                                Body: JSON object with the function's kwargs.
+                                bytes parameters take hex strings, e.g. {"visited_plmn_id": "00f110"}.
+  GET    /status                Connection state.
+  GET    /responses             List auto-response rules and available commands.
+  PUT    /responses/<command>   Set auto-response kwargs for a Diameter command.
+                                Body: JSON kwargs for the answer function, e.g.
+                                  PUT /responses/Location-Info
+                                  {"result_code": 2001, "server_name": "sip:scscf.example.com"}
+                                  PUT /responses/User-Data
+                                  {"result_code": 2001, "sh_user_data": "3c...hex..."}
+  DELETE /responses/<command>   Remove an auto-response rule.
 """
 
 import argparse
@@ -82,6 +90,13 @@ def _reader_loop(sock: socket.socket, server: str) -> None:
             d = peer.msg_to_dict(msg, source=server, raw=raw)
             _store(d)
             print(f"[TCP] recv  {msg.command!r}  from {server}")
+            resp_raw = peer.build_auto_response(msg)
+            if resp_raw:
+                try:
+                    sock.sendall(resp_raw)
+                    print(f"[TCP] auto-reply  {msg.command!r}  to {server}")
+                except OSError:
+                    break
 
 
 def _connect_loop(host: str, port: int) -> None:
@@ -181,6 +196,29 @@ def status():
         "server": server,
         "received_messages": received,
     })
+
+
+@app.route("/responses", methods=["GET"])
+def list_responses():
+    return jsonify({
+        "rules": peer.all_response_rules(),
+        "available": sorted(peer.REQUEST_TO_ANSWER.keys()),
+    })
+
+
+@app.route("/responses/<command>", methods=["PUT"])
+def set_response(command):
+    if command not in peer.REQUEST_TO_ANSWER:
+        return jsonify({"error": f"No answer function for command {command!r}"}), 404
+    body = request.get_json(silent=True) or {}
+    peer.set_response_rule(command, body)
+    return jsonify({"command": command, "answer_func": peer.REQUEST_TO_ANSWER[command], "rule": body})
+
+
+@app.route("/responses/<command>", methods=["DELETE"])
+def delete_response(command):
+    deleted = peer.delete_response_rule(command)
+    return jsonify({"deleted": deleted})
 
 
 # ---------------------------------------------------------------------------

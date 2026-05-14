@@ -7,6 +7,7 @@ registry with automatic type coercion from JSON request bodies.
 
 import inspect
 import sys
+import threading
 import typing
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -209,3 +210,95 @@ def build_message(func_name: str, body: Dict) -> Message:
     if func is None:
         raise KeyError(f"Unknown function: {func_name!r}")
     return func(**build_kwargs(func, body))
+
+
+# ---------------------------------------------------------------------------
+# Auto-response engine
+# ---------------------------------------------------------------------------
+
+# Maps incoming Diameter command name → tgpp answer-function name.
+REQUEST_TO_ANSWER: Dict[str, str] = {
+    "3GPP-Update-Location":             "ula",
+    "3GPP-Authentication-Information":  "aia",
+    "3GPP-Cancel-Location":             "cla",
+    "3GPP-Insert-Subscriber-Data":      "ida",
+    "3GPP-Delete-Subscriber-Data":      "dsa",
+    "3GPP-Purge-UE":                    "pua_s6a",
+    "3GPP-Reset":                       "rsa_s6a",
+    "3GPP-Notify":                      "noa",
+    "Location-Info":                    "lia",
+    "Multimedia-Auth":                  "maa",
+    "Server-Assignment":                "saa",
+    "Registration-Termination":         "rta",
+    "Push-Profile":                     "ppa",
+    "User-Data":                        "uda",
+    "Profile-Update":                   "pua_sh",
+    "Subscribe-Notifications":          "sna",
+    "Push-Notification":                "pna",
+    "AA":                               "aaa_rx",
+    "Session-Termination":              "sta_rx",
+    "Re-Auth":                          "raa_rx",
+    "Abort-Session":                    "asa_rx",
+    "Credit-Control":                   "cca_gx",
+    "Capabilities-Exchange":            "cea",
+    "Device-Watchdog":                  "dwa",
+    "Disconnect-Peer":                  "dpa",
+    "UA":                               "uaa",
+}
+
+_resp_lock = threading.Lock()
+_response_rules: Dict[str, Dict] = {}
+
+
+def set_response_rule(command: str, kwargs: Dict) -> None:
+    """Register auto-response kwargs overrides for requests with *command*."""
+    with _resp_lock:
+        _response_rules[command] = dict(kwargs)
+
+
+def get_response_rule(command: str) -> Optional[Dict]:
+    with _resp_lock:
+        rule = _response_rules.get(command)
+        return dict(rule) if rule is not None else None
+
+
+def delete_response_rule(command: str) -> bool:
+    with _resp_lock:
+        return _response_rules.pop(command, None) is not None
+
+
+def all_response_rules() -> Dict[str, Dict]:
+    with _resp_lock:
+        return {k: dict(v) for k, v in _response_rules.items()}
+
+
+def build_auto_response(msg: Message) -> Optional[bytes]:
+    """
+    Build and encode an answer for an incoming request message.
+
+    The Session-Id is mirrored from the request unless the rule overrides it.
+    Returns None when no rule is registered for the command or when *msg* is
+    itself an answer.
+    """
+    if not msg.is_request:
+        return None
+    rule = get_response_rule(msg.command)
+    if rule is None:
+        return None
+    func_name = REQUEST_TO_ANSWER.get(msg.command)
+    if func_name is None:
+        return None
+    func = TGPP_FUNCTIONS.get(func_name)
+    if func is None:
+        return None
+
+    merged = dict(rule)
+    sid_avp = msg.get_avp("Session-Id")
+    if sid_avp is not None and "session_id" not in merged:
+        merged["session_id"] = sid_avp.value
+
+    try:
+        return encode_message(func(**build_kwargs(func, merged)))
+    except Exception as exc:
+        print(f"[auto-response] error building {func_name!r}: {exc}")
+        return None
