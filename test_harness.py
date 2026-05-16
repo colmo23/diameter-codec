@@ -8,10 +8,11 @@ reports results.
 
 Usage
 -----
-    python test_harness.py [--tcp-port N] [--server-http N] [--client-http N]
+    python test_harness.py [--port N] [--server-http N] [--client-http N]
+                          [--transport {tcp,sctp}]
 
 Defaults use non-standard ports so the harness does not clash with a live
-Diameter stack:  TCP 13868, server HTTP 18001, client HTTP 18002.
+Diameter stack:  Diameter 13868, server HTTP 18001, client HTTP 18002.
 """
 
 import argparse
@@ -76,7 +77,7 @@ def _wait_http(api: DiameterAPI, label: str, timeout: float) -> bool:
 def _wait_connected(client_api: DiameterAPI, timeout: float) -> bool:
     """Poll client_api.is_connected() until True or times out."""
     deadline = time.time() + timeout
-    sys.stdout.write(f"    {'client → server TCP':<36}")
+    sys.stdout.write(f"    {'client → server':<36}")
     sys.stdout.flush()
     while time.time() < deadline:
         try:
@@ -187,14 +188,31 @@ def _sline(label: str, value: int, total: int, good: bool) -> None:
 # Main
 # ---------------------------------------------------------------------------
 
+EXAMPLE_RIR = dict(
+    origin_host       = "gmlc.mnc001.mcc272.3gppnetwork.org",
+    origin_realm      = "mnc001.mcc272.3gppnetwork.org",
+    destination_host  = "hss.mnc010.mcc440.3gppnetwork.org",
+    destination_realm = "mnc010.mcc440.3gppnetwork.org",
+    user_name         = "440100123456789",
+)
+
+CUSTOM_RIA = dict(
+    result_code  = 2001,
+    origin_host  = "hss.custom-ria.example.com",
+    origin_realm = "custom-ria.example.com",
+)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Diameter client/server test harness")
-    parser.add_argument("--tcp-port",    type=int, default=13868, metavar="N",
-                        help="TCP port for the Diameter server (default 13868)")
+    parser.add_argument("--port",        type=int, default=13868, metavar="N",
+                        help="Diameter port for the server (default 13868)")
     parser.add_argument("--server-http", type=int, default=18001, metavar="N",
-                        help="HTTP port for the server API    (default 18001)")
+                        help="HTTP port for the server API  (default 18001)")
     parser.add_argument("--client-http", type=int, default=18002, metavar="N",
-                        help="HTTP port for the client API    (default 18002)")
+                        help="HTTP port for the client API  (default 18002)")
+    parser.add_argument("--transport",   choices=["tcp", "sctp"], default="tcp",
+                        help="Transport protocol (default tcp)")
     args = parser.parse_args()
 
     server_api = DiameterAPI(f"http://127.0.0.1:{args.server_http}")
@@ -212,34 +230,36 @@ def main() -> int:
         # ------------------------------------------------------------------
         # Step 1 — start subprocesses
         # ------------------------------------------------------------------
-        print(f"\n[1/6] Starting subprocesses")
+        print(f"\n[1/7] Starting subprocesses  (transport: {args.transport.upper()})")
 
         server_log  = tempfile.TemporaryFile()
         server_proc = _start([
             "server.py",
-            "--tcp-host", "127.0.0.1",
-            "--tcp-port", str(args.tcp_port),
+            "--host", "127.0.0.1",
+            "--port", str(args.port),
             "--http-host", "127.0.0.1",
             "--http-port", str(args.server_http),
+            "--transport", args.transport,
         ], server_log)
         print(f"    server  PID {server_proc.pid}  "
-              f"(TCP 127.0.0.1:{args.tcp_port}  HTTP :{args.server_http})")
+              f"({args.transport.upper()} 127.0.0.1:{args.port}  HTTP :{args.server_http})")
 
         client_log  = tempfile.TemporaryFile()
         client_proc = _start([
             "client.py",
             "--server-host", "127.0.0.1",
-            "--server-port", str(args.tcp_port),
+            "--server-port", str(args.port),
             "--http-host", "127.0.0.1",
             "--http-port", str(args.client_http),
+            "--transport", args.transport,
         ], client_log)
         print(f"    client  PID {client_proc.pid}  "
-              f"(→ TCP :{args.tcp_port}  HTTP :{args.client_http})")
+              f"(→ {args.transport.upper()} :{args.port}  HTTP :{args.client_http})")
 
         # ------------------------------------------------------------------
         # Step 2 — wait for readiness
         # ------------------------------------------------------------------
-        print(f"\n[2/6] Waiting for readiness  (timeout {STARTUP_TIMEOUT}s)")
+        print(f"\n[2/7] Waiting for readiness  (timeout {STARTUP_TIMEOUT}s)")
 
         if not _wait_http(server_api, "server HTTP API", STARTUP_TIMEOUT):
             _dump_logs("server", server_log)
@@ -255,7 +275,7 @@ def main() -> int:
         # ------------------------------------------------------------------
         # Step 3 — discover functions
         # ------------------------------------------------------------------
-        print(f"\n[3/6] Discovering available functions")
+        print(f"\n[3/7] Discovering available functions")
 
         func_names = client_api.list_functions()
         print(f"    {len(func_names)} tgpp functions registered")
@@ -267,7 +287,7 @@ def main() -> int:
         # ------------------------------------------------------------------
         # Step 4 — example ULR: Japanese subscriber roaming in Ireland
         # ------------------------------------------------------------------
-        print(f"\n[4/6] Example ULR — Japan IMSI roaming in Ireland")
+        print(f"\n[4/7] Example ULR — Japan IMSI roaming in Ireland")
         print(f"    IMSI          : {EXAMPLE_ULR['user_name']}  (NTT Docomo MCC=440 MNC=10)")
         print(f"    Visited-PLMN  : {EXAMPLE_ULR['visited_plmn_id'].hex()}  (Vodafone Ireland MCC=272 MNC=01)")
 
@@ -288,20 +308,60 @@ def main() -> int:
             print(f"    {_RED}ERROR: server received no messages{_RESET}")
 
         server_api.clear_messages()
+        client_api.clear_messages()
 
         # ------------------------------------------------------------------
-        # Step 5 — send every message type
+        # Step 5 — RIR with custom server response
         # ------------------------------------------------------------------
-        print(f"\n[5/6] Sending all {len(func_names)} message types via client API")
+        print(f"\n[5/7] Route-Info Request with custom server response")
+        print(f"    IMSI          : {EXAMPLE_RIR['user_name']}")
+        print(f"    Custom RIA    : origin_host={CUSTOM_RIA['origin_host']!r}  "
+              f"result_code={CUSTOM_RIA['result_code']}")
+
+        server_api.set_response_rule("3GPP-LCS-Routing-Info", **CUSTOM_RIA)
+        client_api.send("rir", **EXAMPLE_RIR)
+        time.sleep(DELIVERY_WAIT)
+
+        rir_ok = False
+        ria_ok = False
+        for m in server_api.get_messages():
+            if m.command == "3GPP-LCS-Routing-Info" and m.is_request:
+                rir_ok = True
+                print(f"    Server received  : {m.command} Request  "
+                      f"({len(m.raw_bytes())} bytes)")
+        for m in client_api.get_messages():
+            if m.command == "3GPP-LCS-Routing-Info" and not m.is_request:
+                ria_ok = True
+                origin = m.get_avp_value("Origin-Host")
+                result = m.get_avp_value("Result-Code")
+                print(f"    Client received  : {m.command} Answer  "
+                      f"origin={origin!r}  result={result}")
+
+        if rir_ok and ria_ok:
+            print(f"    {_GREEN}OK{_RESET}  RIR sent and custom RIA received")
+        else:
+            if not rir_ok:
+                print(f"    {_RED}ERROR: server did not receive RIR{_RESET}")
+            if not ria_ok:
+                print(f"    {_RED}ERROR: client did not receive RIA{_RESET}")
+
+        server_api.delete_response_rule("3GPP-LCS-Routing-Info")
+        server_api.clear_messages()
+        client_api.clear_messages()
+
+        # ------------------------------------------------------------------
+        # Step 6 — send every message type
+        # ------------------------------------------------------------------
+        print(f"\n[6/7] Sending all {len(func_names)} message types via client API")
         t0      = time.time()
         results = _send_all(client_api, func_names)
         elapsed = time.time() - t0
         print(f"\n    Completed in {elapsed:.2f}s")
 
         # ------------------------------------------------------------------
-        # Step 6 — verify receipt on server
+        # Step 7 — verify receipt on server
         # ------------------------------------------------------------------
-        print(f"\n[6/6] Verifying receipt on server  (waiting {DELIVERY_WAIT}s)")
+        print(f"\n[7/7] Verifying receipt on server  (waiting {DELIVERY_WAIT}s)")
         time.sleep(DELIVERY_WAIT)
 
         received = len(server_api.get_messages())

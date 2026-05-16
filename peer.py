@@ -226,6 +226,7 @@ REQUEST_TO_ANSWER: Dict[str, str] = {
     "3GPP-Purge-UE":                    "pua_s6a",
     "3GPP-Reset":                       "rsa_s6a",
     "3GPP-Notify":                      "noa",
+    "3GPP-LCS-Routing-Info":             "ria",
     "Location-Info":                    "lia",
     "Multimedia-Auth":                  "maa",
     "Server-Assignment":                "saa",

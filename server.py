@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Diameter TCP server with HTTP management API.
+Diameter TCP/SCTP server with HTTP management API.
 
-    python server.py [--tcp-host HOST] [--tcp-port PORT]
+    python server.py [--host HOST] [--port PORT]
                      [--http-host HOST] [--http-port PORT]
+                     [--transport {tcp,sctp}]
 
 Defaults
 --------
-  TCP  : 0.0.0.0:3868  (RFC 6733 default Diameter port)
-  HTTP : 127.0.0.1:8001
+  Diameter : 0.0.0.0:3868  (RFC 6733 default Diameter port)
+  HTTP     : 127.0.0.1:8001
 
 HTTP endpoints
 --------------
@@ -39,6 +40,8 @@ import socket
 import threading
 
 from flask import Flask, Response, jsonify, request
+
+IPPROTO_SCTP = 132
 
 import peer
 
@@ -82,9 +85,9 @@ def _broadcast(raw: bytes) -> int:
 # TCP server
 # ---------------------------------------------------------------------------
 
-def _handle_client(conn: socket.socket, addr) -> None:
+def _handle_client(conn: socket.socket, addr, label: str) -> None:
     source = f"{addr[0]}:{addr[1]}"
-    print(f"[TCP] connected  {source}")
+    print(f"[{label}] connected  {source}")
     with _lock:
         _clients.append(conn)
     try:
@@ -96,12 +99,12 @@ def _handle_client(conn: socket.socket, addr) -> None:
             if msg:
                 d = peer.msg_to_dict(msg, source=source, raw=raw)
                 _store(d)
-                print(f"[TCP] recv  {msg.command!r}  from {source}")
+                print(f"[{label}] recv  {msg.command!r}  from {source}")
                 resp_raw = peer.build_auto_response(msg)
                 if resp_raw:
                     try:
                         conn.sendall(resp_raw)
-                        print(f"[TCP] auto-reply  {msg.command!r}  to {source}")
+                        print(f"[{label}] auto-reply  {msg.command!r}  to {source}")
                     except OSError:
                         break
     finally:
@@ -109,18 +112,20 @@ def _handle_client(conn: socket.socket, addr) -> None:
             if conn in _clients:
                 _clients.remove(conn)
         conn.close()
-        print(f"[TCP] disconnected  {source}")
+        print(f"[{label}] disconnected  {source}")
 
 
-def _accept_loop(host: str, port: int) -> None:
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+def _accept_loop(host: str, port: int, transport: str) -> None:
+    proto = IPPROTO_SCTP if transport == "sctp" else 0
+    label = transport.upper()
+    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM, proto)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     srv.bind((host, port))
     srv.listen(32)
-    print(f"[TCP] listening on {host}:{port}")
+    print(f"[{label}] listening on {host}:{port}")
     while True:
         conn, addr = srv.accept()
-        threading.Thread(target=_handle_client, args=(conn, addr), daemon=True).start()
+        threading.Thread(target=_handle_client, args=(conn, addr, label), daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -221,16 +226,17 @@ def delete_response(command):
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Diameter TCP server + HTTP API")
-    parser.add_argument("--tcp-host", default="0.0.0.0", metavar="HOST")
-    parser.add_argument("--tcp-port", type=int, default=3868, metavar="PORT")
+    parser = argparse.ArgumentParser(description="Diameter TCP/SCTP server + HTTP API")
+    parser.add_argument("--host", default="0.0.0.0", metavar="HOST")
+    parser.add_argument("--port", type=int, default=3868, metavar="PORT")
     parser.add_argument("--http-host", default="127.0.0.1", metavar="HOST")
     parser.add_argument("--http-port", type=int, default=8001, metavar="PORT")
+    parser.add_argument("--transport", choices=["tcp", "sctp"], default="tcp", metavar="TRANSPORT")
     args = parser.parse_args()
 
     threading.Thread(
         target=_accept_loop,
-        args=(args.tcp_host, args.tcp_port),
+        args=(args.host, args.port, args.transport),
         daemon=True,
     ).start()
 

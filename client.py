@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """
-Diameter TCP client with HTTP management API.
+Diameter TCP/SCTP client with HTTP management API.
 
     python client.py [--server-host HOST] [--server-port PORT]
                      [--http-host HOST]   [--http-port PORT]
+                     [--transport {tcp,sctp}]
 
 Defaults
 --------
-  Server TCP : 127.0.0.1:3868
-  HTTP       : 127.0.0.1:8002
+  Diameter : 127.0.0.1:3868
+  HTTP     : 127.0.0.1:8002
 
 The client reconnects automatically whenever the connection drops.
 
@@ -41,6 +42,8 @@ import time
 from typing import Optional
 
 from flask import Flask, Response, jsonify, request
+
+IPPROTO_SCTP = 132
 
 import peer
 
@@ -80,7 +83,7 @@ def _send(raw: bytes) -> bool:
 # TCP client
 # ---------------------------------------------------------------------------
 
-def _reader_loop(sock: socket.socket, server: str) -> None:
+def _reader_loop(sock: socket.socket, server: str, label: str) -> None:
     while True:
         raw = peer.read_message(sock)
         if raw is None:
@@ -89,36 +92,40 @@ def _reader_loop(sock: socket.socket, server: str) -> None:
         if msg:
             d = peer.msg_to_dict(msg, source=server, raw=raw)
             _store(d)
-            print(f"[TCP] recv  {msg.command!r}  from {server}")
+            print(f"[{label}] recv  {msg.command!r}  from {server}")
             resp_raw = peer.build_auto_response(msg)
             if resp_raw:
                 try:
                     sock.sendall(resp_raw)
-                    print(f"[TCP] auto-reply  {msg.command!r}  to {server}")
+                    print(f"[{label}] auto-reply  {msg.command!r}  to {server}")
                 except OSError:
                     break
 
 
-def _connect_loop(host: str, port: int) -> None:
+def _connect_loop(host: str, port: int, transport: str) -> None:
     global _sock, _connected, _server_addr
     _server_addr = f"{host}:{port}"
+    label = transport.upper()
+    proto = IPPROTO_SCTP if transport == "sctp" else 0
     while True:
         try:
-            print(f"[TCP] connecting to {_server_addr} ...")
-            s = socket.create_connection((host, port), timeout=5)
+            print(f"[{label}] connecting to {_server_addr} ...")
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM, proto)
+            s.settimeout(5)
+            s.connect((host, port))
             s.settimeout(None)
             with _lock:
                 _sock = s
                 _connected = True
-            print(f"[TCP] connected to {_server_addr}")
-            _reader_loop(s, _server_addr)
+            print(f"[{label}] connected to {_server_addr}")
+            _reader_loop(s, _server_addr, label)
         except OSError as e:
-            print(f"[TCP] error: {e}")
+            print(f"[{label}] error: {e}")
         finally:
             with _lock:
                 _connected = False
                 _sock = None
-        print("[TCP] reconnecting in 5 s ...")
+        print(f"[{label}] reconnecting in 5 s ...")
         time.sleep(5)
 
 
@@ -226,16 +233,17 @@ def delete_response(command):
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Diameter TCP client + HTTP API")
+    parser = argparse.ArgumentParser(description="Diameter TCP/SCTP client + HTTP API")
     parser.add_argument("--server-host", default="127.0.0.1", metavar="HOST")
     parser.add_argument("--server-port", type=int, default=3868, metavar="PORT")
     parser.add_argument("--http-host", default="127.0.0.1", metavar="HOST")
     parser.add_argument("--http-port", type=int, default=8002, metavar="PORT")
+    parser.add_argument("--transport", choices=["tcp", "sctp"], default="tcp", metavar="TRANSPORT")
     args = parser.parse_args()
 
     threading.Thread(
         target=_connect_loop,
-        args=(args.server_host, args.server_port),
+        args=(args.server_host, args.server_port, args.transport),
         daemon=True,
     ).start()
 
